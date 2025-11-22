@@ -2,6 +2,5 @@ streamlit
 boto3
 numpy
 pillow
-opencv-python
-tensorflow==2.15.0
+opencv-python-headless
 reportlab
