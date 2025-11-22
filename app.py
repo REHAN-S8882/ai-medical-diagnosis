@@ -17,8 +17,15 @@ from reportlab.pdfgen import canvas
 ENDPOINT_NAME = st.secrets.get("ENDPOINT_NAME", "pneumonia-detector-endpoint-v7")
 AWS_REGION = st.secrets.get("AWS_REGION", "ap-south-1")
 
-# Use the same image size you used for training
+# Image size used during training
 IMG_SIZE = (224, 224)
+
+# Demo images included in the repo (relative paths)
+SAMPLE_IMAGES = {
+    "Sample pneumonia case": "test_image.jpg",  # already in your repo root
+    # You can add more later, e.g.:
+    # "Sample normal chest X-ray": "sample_images/normal_demo.jpg",
+}
 
 # =========================
 # SAGEMAKER CLIENT
@@ -30,12 +37,12 @@ def get_sagemaker_runtime():
     SageMaker Runtime client.
 
     - Locally: uses your AWS CLI / env credentials
-    - On Streamlit Cloud: uses st.secrets['aws']
+    - On Streamlit Cloud: uses st.secrets["aws"]
     """
     aws_secrets = st.secrets.get("aws", None)
 
     if aws_secrets:
-        # Running on Streamlit Cloud – use keys from secrets
+        # Running on Streamlit Cloud – use secrets
         return boto3.client(
             "sagemaker-runtime",
             region_name=aws_secrets.get("region", AWS_REGION),
@@ -73,7 +80,11 @@ def build_pdf_report(
     # Timestamp
     y -= 30
     c.setFont("Helvetica", 10)
-    c.drawString(50, y, f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    c.drawString(
+        50,
+        y,
+        f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    )
 
     # Patient / study info
     y -= 40
@@ -95,14 +106,13 @@ def build_pdf_report(
     y -= 18
     c.drawString(50, y, f"Model probability (pneumonia): {probability:.3f}")
 
-    # Notes
+    # Notes (wrapped)
     y -= 30
     c.setFont("Helvetica-Bold", 12)
     c.drawString(50, y, "Notes")
     c.setFont("Helvetica", 10)
     y -= 18
 
-    # Simple word-wrap for notes
     wrapped = []
     line = ""
     max_chars = 90
@@ -135,12 +145,13 @@ def build_pdf_report(
 
 def preprocess_image(image: Image.Image) -> bytes:
     """
-    Resize to IMG_SIZE, normalize to [0,1], make batch of 1, return JSON bytes.
+    Convert PIL image → normalized numpy array → JSON bytes
+    suitable for the SageMaker TensorFlow endpoint.
     """
     image = image.convert("RGB")
     image = image.resize(IMG_SIZE)
     img_array = np.array(image) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)  # shape: (1, H, W, 3)
+    img_array = np.expand_dims(img_array, axis=0)  # shape (1, H, W, 3)
     return json.dumps(img_array.tolist()).encode("utf-8")
 
 
@@ -150,7 +161,7 @@ def preprocess_image(image: Image.Image) -> bytes:
 
 def invoke_model(image_bytes: bytes) -> float:
     """
-    Call the SageMaker endpoint and return pneumonia probability as float.
+    Call the SageMaker endpoint and return pneumonia probability (float).
     """
     client = get_sagemaker_runtime()
     response = client.invoke_endpoint(
@@ -169,7 +180,7 @@ def invoke_model(image_bytes: bytes) -> float:
 
 def map_probability(prob: float) -> str:
     """
-    Map probability to human-readable label.
+    Map probability → human-friendly diagnosis label.
     """
     if prob >= 0.75:
         return "Pneumonia Detected"
@@ -187,53 +198,79 @@ def main():
     st.set_page_config(page_title="AI Pneumonia Detector", layout="centered")
 
     st.title("🩺 AI-Powered Pneumonia Detector")
-    st.write("Upload Chest X-ray image to analyze Pneumonia probability.")
+    st.write(
+        "Upload a Chest X-ray image **or** use a built-in demo sample "
+        "to analyze Pneumonia probability using an AWS SageMaker model."
+    )
 
-    uploaded_file = st.file_uploader(
-        "Upload Chest X-ray Image (JPEG/PNG)", type=["jpg", "jpeg", "png"]
+    # --- Input mode selector ---
+    mode = st.radio(
+        "Choose input mode",
+        ["Upload image", "Use demo sample"],
+        horizontal=True,
     )
 
     patient_id = st.text_input("Patient / Study ID (optional)")
 
-    if uploaded_file:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded X-ray", use_column_width=True)
+    image = None
 
-        if st.button("Run AI Diagnosis"):
-            with st.spinner("Analyzing using SageMaker model..."):
-                try:
-                    payload = preprocess_image(image)
-                    prob = invoke_model(payload)
-                    diagnosis = map_probability(prob)
+    if mode == "Upload image":
+        uploaded_file = st.file_uploader(
+            "Upload Chest X-ray Image (JPEG/PNG)",
+            type=["jpg", "jpeg", "png"],
+        )
 
-                    st.subheader("🧾 Result")
-                    st.write(f"**Diagnosis:** {diagnosis}")
-                    st.write(f"**Probability (pneumonia):** {prob:.3f}")
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file)
+            st.image(image, caption="Uploaded X-ray", use_column_width=True)
 
-                    notes = (
-                        "This AI-powered system is intended for decision support only. "
-                        "All findings must be reviewed and confirmed by a qualified clinician "
-                        "before making any diagnostic or treatment decisions."
-                    )
+    else:  # Use demo sample
+        sample_name = st.selectbox("Choose demo X-ray", list(SAMPLE_IMAGES.keys()))
+        image_path = SAMPLE_IMAGES[sample_name]
 
-                    pdf_bytes = build_pdf_report(
-                        patient_id=patient_id,
-                        diagnosis_label=diagnosis,
-                        probability=prob,
-                        notes=notes,
-                    )
+        try:
+            image = Image.open(image_path)
+            st.image(image, caption=f"Demo: {sample_name}", use_column_width=True)
+            st.info("You are running the model in **demo mode** using a sample image.")
+        except FileNotFoundError:
+            st.error(f"Demo image not found at: {image_path}")
+            image = None
 
-                    st.download_button(
-                        label="📄 Download Medical PDF Report",
-                        data=pdf_bytes,
-                        file_name="pneumonia_report.pdf",
-                        mime="application/pdf",
-                    )
+    # --- Run model if we have an image ---
+    if image is not None and st.button("Run AI Diagnosis"):
+        with st.spinner("Analyzing using SageMaker model..."):
+            try:
+                payload = preprocess_image(image)
+                prob = invoke_model(payload)
+                diagnosis = map_probability(prob)
 
-                except Exception as e:
-                    st.error(f"Something went wrong while calling the model: {e}")
+                st.subheader("🧾 Result")
+                st.write(f"**Diagnosis:** {diagnosis}")
+                st.write(f"**Probability (pneumonia):** {prob:.3f}")
+
+                notes = (
+                    "This AI-powered system provides decision support only. "
+                    "It must not be used as a sole basis for clinical decisions. "
+                    "All findings should be reviewed by a qualified radiologist."
+                )
+
+                pdf_bytes = build_pdf_report(
+                    patient_id=patient_id,
+                    diagnosis_label=diagnosis,
+                    probability=prob,
+                    notes=notes,
+                )
+
+                st.download_button(
+                    label="📄 Download Medical PDF Report",
+                    data=pdf_bytes,
+                    file_name="pneumonia_report.pdf",
+                    mime="application/pdf",
+                )
+
+            except Exception as e:
+                st.error(f"Something went wrong while calling the model: {e}")
 
 
 if __name__ == "__main__":
     main()
-# deployment/app.py
