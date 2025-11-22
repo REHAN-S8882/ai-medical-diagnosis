@@ -10,22 +10,38 @@ from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
+
 # =========================
 # CONFIG
 # =========================
 
-# Read from Streamlit secrets if available, otherwise fall back
-ENDPOINT_NAME = st.secrets.get("ENDPOINT_NAME", "pneumonia-detector-endpoint-v7")
-AWS_REGION = st.secrets.get("AWS_REGION", "ap-south-1")
-
+ENDPOINT_NAME = "pneumonia-detector-endpoint-v7"
+AWS_REGION = "ap-south-1"
 IMG_SIZE = (224, 224)
 
+
 # =========================
-# SAGEMAKER CLIENT
+# SAGEMAKER CLIENT USING STREAMLIT SECRETS
 # =========================
 
 @st.cache_resource
 def get_sagemaker_runtime():
+    """
+    Uses:
+    - Streamlit Cloud secrets if available
+    - Local AWS CLI credentials otherwise
+    """
+
+    aws_secrets = st.secrets.get("aws", None)
+
+    if aws_secrets:
+        return boto3.client(
+            "sagemaker-runtime",
+            region_name=aws_secrets.get("region", AWS_REGION),
+            aws_access_key_id=aws_secrets["access_key_id"],
+            aws_secret_access_key=aws_secrets["secret_access_key"],
+        )
+
     return boto3.client("sagemaker-runtime", region_name=AWS_REGION)
 
 
@@ -151,7 +167,10 @@ def main():
     st.title("🩺 AI-Powered Pneumonia Detector")
     st.write("Upload Chest X-ray image to analyze Pneumonia probability")
 
-    uploaded_file = st.file_uploader("Upload Chest X-ray Image (JPEG/PNG)", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader(
+        "Upload Chest X-ray Image (JPEG/PNG)",
+        type=["jpg", "jpeg", "png"]
+    )
 
     patient_id = st.text_input("Patient / Study ID (optional)")
 
