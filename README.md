@@ -1,4 +1,4 @@
-🩺 AI Medical Diagnosis System – Pneumonia Detection
+🩺 AI Medical Diagnosis System – Pneumonia Detection(https://ai-medical-diagnosis-mz8yefsch5xwtsqq28ftru.streamlit.app/)
 
 An end-to-end AI-powered medical imaging solution that detects pneumonia from chest X-ray images using Deep Learning and cloud-based deployment. This project integrates model training, real-time inference, explainability, and an interactive web interface for clinical usage.
 
